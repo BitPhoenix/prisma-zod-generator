@@ -15,8 +15,8 @@ export default class Transformer {
   static provider: string;
   private static outputPath: string = './generated';
   private hasJson = false;
-  static isDefaultPrismaClientOutput?: boolean;
-  static prismaClientOutputPath?: string;
+  private static prismaClientOutputPath: string = '@prisma/client';
+  private static isCustomPrismaClientOutputPath: boolean = false;
 
   constructor(params: TransformerParams) {
     this.name = params.name ?? '';
@@ -31,6 +31,12 @@ export default class Transformer {
 
   static getOutputPath() {
     return this.outputPath;
+  }
+
+  static setPrismaClientOutputPath(prismaClientCustomPath: string) {
+    this.prismaClientOutputPath = prismaClientCustomPath;
+    this.isCustomPrismaClientOutputPath =
+      prismaClientCustomPath !== '@prisma/client';
   }
 
   addSchemaImport(name: string) {
@@ -185,25 +191,32 @@ export default class Transformer {
     return zodStringWithMainType;
   }
 
-  getImportZod() {
-    let zodImportStatement = "import { z } from 'zod';";
-    zodImportStatement += '\n';
-    return zodImportStatement;
+  getImportZodStatement() {
+    return "import { z } from 'zod';\n";
   }
 
-  getImportPrisma() {
-    let prismaClientPath = '@prisma/client';
-    if (Transformer.isDefaultPrismaClientOutput) {
-      prismaClientPath = Transformer.prismaClientOutputPath ?? '';
-      prismaClientPath = path
-        .relative(
-          path.join(Transformer.outputPath, 'schemas', 'objects'),
-          prismaClientPath,
-        )
+  getImportPrismaStatement() {
+    let prismaClientImportPath: string;
+    if (Transformer.isCustomPrismaClientOutputPath) {
+      /**
+       * If a custom location was designated for the prisma client, we need to figure out the
+       * relative path from {outputPath}/schemas/objects to {prismaClientCustomPath}
+       */
+      const fromPath = path.join(Transformer.outputPath, 'schemas', 'objects');
+      const toPath = Transformer.prismaClientOutputPath!;
+      const relativePathFromOutputToPrismaClient = path
+        .relative(fromPath, toPath)
         .split(path.sep)
         .join(path.posix.sep);
+      prismaClientImportPath = relativePathFromOutputToPrismaClient;
+    } else {
+      /**
+       * If the default output path for prisma client (@prisma/client) is being used, we can import from it directly
+       * without having to resolve a relative path
+       */
+      prismaClientImportPath = Transformer.prismaClientOutputPath;
     }
-    return `import type { Prisma } from '${prismaClientPath}';\n\n`;
+    return `import type { Prisma } from '${prismaClientImportPath}';\n\n`;
   }
 
   getJsonSchemaImplementation() {
@@ -221,14 +234,14 @@ export default class Transformer {
   }
 
   getImportsForObjectSchemas() {
-    let imports = this.getImportZod();
+    let imports = this.getImportZodStatement();
     imports += this.getAllSchemaImports();
     imports += '\n\n';
     return imports;
   }
 
   getImportsForSchemas(additionalImports: string[]) {
-    let imports = this.getImportZod();
+    let imports = this.getImportZodStatement();
     imports += [...additionalImports].join(';\r\n');
     imports += '\n\n';
     return imports;
@@ -299,14 +312,14 @@ export default class Transformer {
       this.addFinalWrappers({ zodStringFields }),
     )}\n`;
 
-    const prismaImport = this.getImportPrisma();
+    const prismaImportStatement = this.getImportPrismaStatement();
 
     const json = this.getJsonSchemaImplementation();
 
-    return `${this.getImportsForObjectSchemas()}${prismaImport}${json}${objectSchema}`;
+    return `${this.getImportsForObjectSchemas()}${prismaImportStatement}${json}${objectSchema}`;
   }
 
-  async printObjectSchemas() {
+  async generateObjectSchemas() {
     const zodStringFields = this.fields
       .map((field) => this.getObjectSchemaLine(field))
       .flatMap((item) => item)
@@ -337,7 +350,7 @@ export default class Transformer {
     );
   }
 
-  async printModelSchemas() {
+  async generateModelSchemas() {
     for (const model of this.modelOperations) {
       const {
         model: modelName,
@@ -532,13 +545,13 @@ export default class Transformer {
     }
   }
 
-  async printEnumSchemas() {
+  async generateEnumSchemas() {
     for (const enumType of this.enumTypes) {
       const { name, values } = enumType;
 
       await writeFileSafely(
         path.join(Transformer.outputPath, `schemas/enums/${name}.schema.ts`),
-        `${this.getImportZod()}\n${this.addExportSchema(
+        `${this.getImportZodStatement()}\n${this.addExportSchema(
           `z.enum(${JSON.stringify(values)})`,
           `${name}`,
         )}`,
